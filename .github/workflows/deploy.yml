@@ -53,21 +53,25 @@ jobs:
           # Pass GitHub repository to SSH session
           GITHUB_REPO="${{ github.repository }}"
 
-          # SSH into server
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << 'EOF'
+          # SSH into server and pass variables as environment variables
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST \
+            SERVER_PATH="$SERVER_PATH" \
+            BRANCH_NAME="$BRANCH_NAME" \
+            GITHUB_REPO="$GITHUB_REPO" \
+            bash << 'EOF'
             # Navigate to project folder or clone if it doesn't exist
             if [ ! -d "$SERVER_PATH" ]; then
               echo "Project not found. Cloning repository..."
-              git clone -b $BRANCH_NAME https://github.com/$GITHUB_REPO.git $SERVER_PATH
+              git clone -b "$BRANCH_NAME" "https://github.com/$GITHUB_REPO.git" "$SERVER_PATH"
             fi
 
-            cd $SERVER_PATH
+            cd "$SERVER_PATH" || exit 1
 
             # Ensure it's a git repository
             if [ -d ".git" ]; then
               echo "Updating existing project..."
               git fetch --all
-              git reset --hard origin/$BRANCH_NAME
+              git reset --hard "origin/$BRANCH_NAME"
             else
               echo "⚠️ Not a git repository. Exiting."
               exit 1
@@ -78,6 +82,7 @@ jobs:
               composer install --no-dev --optimize-autoloader
             else
               echo "Composer not found!"
+              exit 1
             fi
 
             # Laravel setup
@@ -90,6 +95,7 @@ jobs:
               php artisan storage:link || true
             else
               echo "artisan file not found!"
+              exit 1
             fi
 
             echo "✅ Deployment completed successfully"
