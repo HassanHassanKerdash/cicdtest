@@ -21,7 +21,7 @@ jobs:
           php-version: '8.2'
           extensions: mbstring, bcmath, intl, pdo_mysql
 
-      # Step 3: Install Composer dependencies locally
+      # Step 3: Install Composer dependencies locally (for caching)
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader
 
@@ -35,25 +35,35 @@ jobs:
       - name: Deploy to cPanel server
         run: |
           ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-          
-          # Navigate to server path or clone repository if not exists
+
+          # -------------------------------
+          # Navigate to project or clone repository if not exists
+          # -------------------------------
           if [ -d "${{ secrets.SERVER_PATH }}/.git" ]; then
-              echo "Project exists, pulling latest changes..."
+              echo "Project exists. Fetching latest changes..."
               cd ${{ secrets.SERVER_PATH }}
-              git reset --hard
+              git fetch --all
+              git reset --hard origin/main
               git clean -fd
-              git pull origin main
           else
-              echo "Project does not exist, cloning repository..."
+              echo "Project does not exist. Cloning repository..."
               git clone -b main https://github.com/${{ github.repository }} ${{ secrets.SERVER_PATH }}
               cd ${{ secrets.SERVER_PATH }}
           fi
 
+          # -------------------------------
           # Install Composer dependencies on server
+          # -------------------------------
           composer install --no-dev --optimize-autoloader
 
-          # Run Laravel commands to prepare the application
+          # -------------------------------
+          # Clear and rebuild Laravel caches
+          # -------------------------------
           php artisan migrate --force
+          php artisan config:clear
+          php artisan route:clear
+          php artisan view:clear
+          php artisan cache:clear
           php artisan config:cache
           php artisan route:cache
           php artisan view:cache
