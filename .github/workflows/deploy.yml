@@ -60,7 +60,7 @@ jobs:
             GITHUB_REPO="$GITHUB_REPO" \
             bash << 'EOF'
 
-            # Check if project folder exists and contains Git repo and composer.lock
+            # Check if project folder exists, Git repo and composer.lock
             if [ ! -d "$SERVER_PATH" ] || [ ! -d "$SERVER_PATH/.git" ] || [ ! -f "$SERVER_PATH/composer.lock" ]; then
               echo "Project folder invalid or missing. Cloning repository..."
               rm -rf "$SERVER_PATH"
@@ -69,6 +69,12 @@ jobs:
 
             # Navigate to project folder
             cd "$SERVER_PATH" || exit 1
+
+            # Ensure .env file exists
+            if [ ! -f ".env" ]; then
+              echo "Creating .env from .env.example"
+              cp .env.example .env || { echo "Failed to create .env"; exit 1; }
+            fi
 
             # Update the project from Git
             echo "Updating existing project..."
