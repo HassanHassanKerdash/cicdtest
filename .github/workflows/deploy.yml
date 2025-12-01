@@ -51,13 +51,13 @@ jobs:
             SERVER_HOST="${{ secrets.LIVE_SERVER_HOST }}"
             SERVER_PORT="${{ secrets.LIVE_SERVER_PORT }}"
             SERVER_PATH="${{ secrets.LIVE_SERVER_PATH }}"
-            BRANCH_NAME="${{ secrets.LIVE_BRANCH:-main }}"
+            BRANCH_NAME="${{ secrets.LIVE_BRANCH || 'main' }}"
           else
             SERVER_USER="${{ secrets.DEV_SERVER_USER }}"
             SERVER_HOST="${{ secrets.DEV_SERVER_HOST }}"
             SERVER_PORT="${{ secrets.DEV_SERVER_PORT }}"
             SERVER_PATH="${{ secrets.DEV_SERVER_PATH }}"
-            BRANCH_NAME="${{ secrets.DEV_BRANCH:-develop }}"
+            BRANCH_NAME="${{ secrets.DEV_BRANCH || 'develop' }}"
           fi
 
           # SSH into server and deploy
