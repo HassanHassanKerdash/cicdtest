@@ -54,7 +54,7 @@ jobs:
           GITHUB_REPO="${{ github.repository }}"
 
           # SSH into server
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << EOF
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << 'EOF'
             # Navigate to project folder or clone if it doesn't exist
             if [ ! -d "$SERVER_PATH" ]; then
               echo "Project not found. Cloning repository..."
@@ -93,4 +93,4 @@ jobs:
             fi
 
             echo "✅ Deployment completed successfully"
-EOF
+          EOF
