@@ -82,8 +82,8 @@ jobs:
 
           # Validate that all required secrets are set (except BRANCH_NAME which has defaults)
           if [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$SERVER_PORT" ] || [ -z "$SERVER_PATH" ]; then
-            echo "Error: Missing required secrets for $ENV environment!"
-            echo "Please ensure the following secrets are set in GitHub:"
+            echo "⚠️  Warning: Missing required secrets for $ENV environment!"
+            echo "Skipping deployment. Please ensure the following secrets are set in GitHub:"
             if [ "$ENV" = "live" ]; then
               echo "  - LIVE_SERVER_USER (required)"
               echo "  - LIVE_SERVER_HOST (required)"
@@ -97,7 +97,10 @@ jobs:
               echo "  - DEV_SERVER_PATH (required)"
               echo "  - DEV_BRANCH (optional, defaults to 'develop')"
             fi
-            exit 1
+            echo ""
+            echo "To add secrets, go to: Settings → Secrets and variables → Actions"
+            echo "Workflow will continue but deployment will be skipped."
+            exit 0
           fi
 
           echo "Deploying from branch '$CURRENT_BRANCH' to environment '$ENV'"
