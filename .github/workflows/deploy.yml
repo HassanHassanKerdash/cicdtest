@@ -1,4 +1,4 @@
-name: Deploy Laravel 11 to cPanel
+name: Deploy Laravel 12 to cPanel
 
 on:
   push:
