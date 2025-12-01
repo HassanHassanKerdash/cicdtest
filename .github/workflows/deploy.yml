@@ -59,14 +59,18 @@ jobs:
           CURRENT_BRANCH="${{ github.ref_name }}"
           if [ "$CURRENT_BRANCH" = "main" ]; then
             ENV="live"
+            # Use default "main" if LIVE_BRANCH secret is not set
             BRANCH_NAME="${{ secrets.LIVE_BRANCH }}"
+            BRANCH_NAME="${BRANCH_NAME:-main}"
             SERVER_USER="${{ secrets.LIVE_SERVER_USER }}"
             SERVER_HOST="${{ secrets.LIVE_SERVER_HOST }}"
             SERVER_PORT="${{ secrets.LIVE_SERVER_PORT }}"
             SERVER_PATH="${{ secrets.LIVE_SERVER_PATH }}"
           elif [ "$CURRENT_BRANCH" = "develop" ]; then
             ENV="dev"
+            # Use default "develop" if DEV_BRANCH secret is not set
             BRANCH_NAME="${{ secrets.DEV_BRANCH }}"
+            BRANCH_NAME="${BRANCH_NAME:-develop}"
             SERVER_USER="${{ secrets.DEV_SERVER_USER }}"
             SERVER_HOST="${{ secrets.DEV_SERVER_HOST }}"
             SERVER_PORT="${{ secrets.DEV_SERVER_PORT }}"
@@ -76,27 +80,28 @@ jobs:
             exit 1
           fi
 
-          # Validate that all required secrets are set
-          if [ -z "$BRANCH_NAME" ] || [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$SERVER_PORT" ] || [ -z "$SERVER_PATH" ]; then
+          # Validate that all required secrets are set (except BRANCH_NAME which has defaults)
+          if [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$SERVER_PORT" ] || [ -z "$SERVER_PATH" ]; then
             echo "Error: Missing required secrets for $ENV environment!"
             echo "Please ensure the following secrets are set in GitHub:"
             if [ "$ENV" = "live" ]; then
-              echo "  - LIVE_BRANCH"
-              echo "  - LIVE_SERVER_USER"
-              echo "  - LIVE_SERVER_HOST"
-              echo "  - LIVE_SERVER_PORT"
-              echo "  - LIVE_SERVER_PATH"
+              echo "  - LIVE_SERVER_USER (required)"
+              echo "  - LIVE_SERVER_HOST (required)"
+              echo "  - LIVE_SERVER_PORT (required)"
+              echo "  - LIVE_SERVER_PATH (required)"
+              echo "  - LIVE_BRANCH (optional, defaults to 'main')"
             else
-              echo "  - DEV_BRANCH"
-              echo "  - DEV_SERVER_USER"
-              echo "  - DEV_SERVER_HOST"
-              echo "  - DEV_SERVER_PORT"
-              echo "  - DEV_SERVER_PATH"
+              echo "  - DEV_SERVER_USER (required)"
+              echo "  - DEV_SERVER_HOST (required)"
+              echo "  - DEV_SERVER_PORT (required)"
+              echo "  - DEV_SERVER_PATH (required)"
+              echo "  - DEV_BRANCH (optional, defaults to 'develop')"
             fi
             exit 1
           fi
 
           echo "Deploying from branch '$CURRENT_BRANCH' to environment '$ENV'"
+          echo "Using deployment branch: '$BRANCH_NAME'"
 
           deploy() {
               DEPLOY_BRANCH=$1
