@@ -30,8 +30,20 @@ jobs:
       - name: Deploy to cPanel server
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-          cd ${{ secrets.SERVER_PATH }}
-          git pull origin main
+          # تحقق إذا كان المجلد موجود
+          if [ -d "${{ secrets.SERVER_PATH }}/.git" ]; then
+              echo "Project exists, pulling latest changes..."
+              cd ${{ secrets.SERVER_PATH }}
+              git reset --hard
+              git clean -fd
+              git pull origin main
+          else
+              echo "Project does not exist, cloning repository..."
+              git clone -b main https://github.com/${{ github.repository }} ${{ secrets.SERVER_PATH }}
+              cd ${{ secrets.SERVER_PATH }}
+          fi
+
+          # تثبيت التبعيات وتشغيل أوامر Laravel
           composer install --no-dev --optimize-autoloader
           php artisan migrate --force
           php artisan config:cache
