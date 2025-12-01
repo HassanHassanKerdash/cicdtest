@@ -154,9 +154,13 @@ jobs:
                           php artisan key:generate
                           echo ".env created from .env.example"
                       else
-                          echo "Error: .env.example not found!"
-                          exit 1
+                          echo "⚠️  Warning: .env.example not found. Creating .env from scratch..."
+                          touch .env
+                          php artisan key:generate
+                          echo ".env created successfully"
                       fi
+                  else
+                      echo ".env file already exists, skipping creation"
                   fi
 
                   # -------------------------------
