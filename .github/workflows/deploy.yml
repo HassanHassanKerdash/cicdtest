@@ -3,35 +3,30 @@ name: Deploy Laravel 11 to cPanel
 on:
   push:
     branches:
-      - main   # الفرع الرئيسي للنشر
+      - main
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ سحب الكود
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2️⃣ إعداد PHP
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
           extensions: mbstring, bcmath, intl, pdo_mysql
 
-      # 3️⃣ تثبيت تبعيات Composer
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader
 
-      # 4️⃣ إعداد SSH
       - name: Setup SSH
-        uses: webfactory/ssh-agent@v0.8.3
+        uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # 5️⃣ نشر الكود على السيرفر
       - name: Deploy to cPanel server
         run: |
           ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
