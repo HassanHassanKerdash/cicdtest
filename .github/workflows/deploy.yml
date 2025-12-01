@@ -1,72 +1,151 @@
 name: Deploy Laravel to cPanel
 
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
+    inputs:
+      DEPLOY_ENV:
+        description: 'Which environment to deploy? (dev, live, all)'
+        required: true
+        default: 'dev'
+
+env:
+  DEV_BRANCH: ${{ secrets.DEV_BRANCH }}
+  LIVE_BRANCH: ${{ secrets.LIVE_BRANCH }}
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1: Checkout the code from GitHub
+      # -------------------------------
+      # Step 1: Checkout code
+      # -------------------------------
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # Step 2: Setup PHP environment
+      # -------------------------------
+      # Step 2: Setup PHP
+      # -------------------------------
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
           extensions: mbstring, bcmath, intl, pdo_mysql
 
-      # Step 3: Install Composer dependencies locally (for caching)
+      # -------------------------------
+      # Step 3: Cache Composer dependencies
+      # -------------------------------
+      - name: Cache Composer dependencies
+        uses: actions/cache@v3
+        with:
+          path: vendor
+          key: ${{ runner.os }}-composer-${{ hashFiles('**/composer.lock') }}
+          restore-keys: ${{ runner.os }}-composer-
+
+      # -------------------------------
+      # Step 4: Install Composer dependencies
+      # -------------------------------
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader
 
-      # Step 4: Setup SSH agent with private key
+      # -------------------------------
+      # Step 5: Setup SSH
+      # -------------------------------
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # Step 5: Deploy to cPanel server
-      - name: Deploy to cPanel server
+      # -------------------------------
+      # Step 6: Deploy to selected environments
+      # -------------------------------
+      - name: Deploy to cPanel
         run: |
-          ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          ENV=${{ github.event.inputs.DEPLOY_ENV }}
+
+          deploy() {
+              BRANCH_NAME=$1
+              SERVER_USER=$2
+              SERVER_HOST=$3
+              SERVER_PORT=$4
+              SERVER_PATH=$5
+
+              echo "==============================================="
+              echo "Deploying branch '$BRANCH_NAME' to $SERVER_HOST:$SERVER_PATH"
+              echo "==============================================="
+
+              ssh -p $SERVER_PORT -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << EOF
+                  set -e
+
+                  # -------------------------------
+                  # Backup current project for rollback
+                  # -------------------------------
+                  if [ -d "$SERVER_PATH" ]; then
+                      TIMESTAMP=\$(date +%Y%m%d%H%M%S)
+                      BACKUP_PATH="\${SERVER_PATH}_backup_\$TIMESTAMP"
+                      echo "Backing up current project to \$BACKUP_PATH..."
+                      cp -r "$SERVER_PATH" "\$BACKUP_PATH"
+                  fi
+
+                  # -------------------------------
+                  # Navigate to project or clone repository
+                  # -------------------------------
+                  if [ -d "$SERVER_PATH/.git" ]; then
+                      echo "Project exists. Fetching latest changes..."
+                      cd "$SERVER_PATH"
+                      git fetch --all
+                      git reset --hard origin/$BRANCH_NAME
+                      git clean -fd
+                  else
+                      echo "Project does not exist. Cloning repository..."
+                      git clone -b $BRANCH_NAME https://github.com/${{ github.repository }} "$SERVER_PATH"
+                      cd "$SERVER_PATH"
+                  fi
+
+                  # -------------------------------
+                  # Ensure .env exists
+                  # -------------------------------
+                  if [ ! -f ".env" ]; then
+                      if [ -f ".env.example" ]; then
+                          cp .env.example .env
+                          php artisan key:generate
+                          echo ".env created from .env.example"
+                      else
+                          echo "Error: .env.example not found!"
+                          exit 1
+                      fi
+                  fi
+
+                  # -------------------------------
+                  # Install Composer dependencies
+                  # -------------------------------
+                  composer install --no-dev --optimize-autoloader
+
+                  # -------------------------------
+                  # Laravel maintenance tasks
+                  # -------------------------------
+                  php artisan migrate --force
+                  php artisan config:clear
+                  php artisan route:clear
+                  php artisan view:clear
+                  php artisan cache:clear
+                  php artisan config:cache
+                  php artisan route:cache
+                  php artisan view:cache
+                  php artisan storage:link
+
+                  echo "Deployment completed successfully for $BRANCH_NAME."
+          EOF
+          }
 
           # -------------------------------
-          # Navigate to project or clone repository if not exists
+          # Determine environments to deploy
           # -------------------------------
-          if [ -d "${{ secrets.SERVER_PATH }}/.git" ]; then
-              echo "Project exists. Fetching latest changes..."
-              cd ${{ secrets.SERVER_PATH }}
-              git fetch --all
-              git reset --hard origin/main
-              git clean -fd
-          else
-              echo "Project does not exist. Cloning repository..."
-              git clone -b main https://github.com/${{ github.repository }} ${{ secrets.SERVER_PATH }}
-              cd ${{ secrets.SERVER_PATH }}
+          if [ "$ENV" = "dev" ] || [ "$ENV" = "all" ]; then
+              deploy "${DEV_BRANCH}" "${{ secrets.DEV_SERVER_USER }}" "${{ secrets.DEV_SERVER_HOST }}" "${{ secrets.DEV_SERVER_PORT }}" "${{ secrets.DEV_SERVER_PATH }}"
           fi
 
-          # -------------------------------
-          # Install Composer dependencies on server
-          # -------------------------------
-          composer install --no-dev --optimize-autoloader
+          if [ "$ENV" = "live" ] || [ "$ENV" = "all" ]; then
+              deploy "${LIVE_BRANCH}" "${{ secrets.LIVE_SERVER_USER }}" "${{ secrets.LIVE_SERVER_HOST }}" "${{ secrets.LIVE_SERVER_PORT }}" "${{ secrets.LIVE_SERVER_PATH }}"
+          fi
 
-          # -------------------------------
-          # Clear and rebuild Laravel caches
-          # -------------------------------
-          php artisan migrate --force
-          php artisan config:clear
-          php artisan route:clear
-          php artisan view:clear
-          php artisan cache:clear
-          php artisan config:cache
-          php artisan route:cache
-          php artisan view:cache
-
-          echo "Deployment completed successfully."
-          EOF
