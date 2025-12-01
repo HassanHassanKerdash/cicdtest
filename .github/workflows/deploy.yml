@@ -61,7 +61,7 @@ jobs:
           fi
 
           # SSH into server and deploy
-          ssh -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << 'EOF'
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << 'EOF'
             # Navigate to project or clone if not exists
             cd $SERVER_PATH || git clone -b $BRANCH_NAME https://github.com/${GITHUB_REPOSITORY}.git $SERVER_PATH
             cd $SERVER_PATH
