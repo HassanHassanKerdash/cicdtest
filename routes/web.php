@@ -7,5 +7,5 @@ Route::get('/', function () {
 });
 
 Route::get('/cidcd', function () {
-    return "Hi CI/CD Test 2"
+    return "Hi CI/CD Test 3"
 });
