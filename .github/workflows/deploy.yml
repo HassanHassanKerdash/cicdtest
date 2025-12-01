@@ -6,10 +6,6 @@ on:
       - main
       - develop
 
-env:
-  DEV_BRANCH: ${{ secrets.DEV_BRANCH }}
-  LIVE_BRANCH: ${{ secrets.LIVE_BRANCH }}
-
 jobs:
   deploy:
     runs-on: ubuntu-latest
@@ -63,52 +59,82 @@ jobs:
           CURRENT_BRANCH="${{ github.ref_name }}"
           if [ "$CURRENT_BRANCH" = "main" ]; then
             ENV="live"
+            BRANCH_NAME="${{ secrets.LIVE_BRANCH }}"
+            SERVER_USER="${{ secrets.LIVE_SERVER_USER }}"
+            SERVER_HOST="${{ secrets.LIVE_SERVER_HOST }}"
+            SERVER_PORT="${{ secrets.LIVE_SERVER_PORT }}"
+            SERVER_PATH="${{ secrets.LIVE_SERVER_PATH }}"
           elif [ "$CURRENT_BRANCH" = "develop" ]; then
             ENV="dev"
+            BRANCH_NAME="${{ secrets.DEV_BRANCH }}"
+            SERVER_USER="${{ secrets.DEV_SERVER_USER }}"
+            SERVER_HOST="${{ secrets.DEV_SERVER_HOST }}"
+            SERVER_PORT="${{ secrets.DEV_SERVER_PORT }}"
+            SERVER_PATH="${{ secrets.DEV_SERVER_PATH }}"
           else
             echo "Unknown branch: $CURRENT_BRANCH"
+            exit 1
+          fi
+
+          # Validate that all required secrets are set
+          if [ -z "$BRANCH_NAME" ] || [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$SERVER_PORT" ] || [ -z "$SERVER_PATH" ]; then
+            echo "Error: Missing required secrets for $ENV environment!"
+            echo "Please ensure the following secrets are set in GitHub:"
+            if [ "$ENV" = "live" ]; then
+              echo "  - LIVE_BRANCH"
+              echo "  - LIVE_SERVER_USER"
+              echo "  - LIVE_SERVER_HOST"
+              echo "  - LIVE_SERVER_PORT"
+              echo "  - LIVE_SERVER_PATH"
+            else
+              echo "  - DEV_BRANCH"
+              echo "  - DEV_SERVER_USER"
+              echo "  - DEV_SERVER_HOST"
+              echo "  - DEV_SERVER_PORT"
+              echo "  - DEV_SERVER_PATH"
+            fi
             exit 1
           fi
 
           echo "Deploying from branch '$CURRENT_BRANCH' to environment '$ENV'"
 
           deploy() {
-              BRANCH_NAME=$1
-              SERVER_USER=$2
-              SERVER_HOST=$3
-              SERVER_PORT=$4
-              SERVER_PATH=$5
+              DEPLOY_BRANCH=$1
+              DEPLOY_USER=$2
+              DEPLOY_HOST=$3
+              DEPLOY_PORT=$4
+              DEPLOY_PATH=$5
 
               echo "==============================================="
-              echo "Deploying branch '$BRANCH_NAME' to $SERVER_HOST:$SERVER_PATH"
+              echo "Deploying branch '$DEPLOY_BRANCH' to $DEPLOY_HOST:$DEPLOY_PATH"
               echo "==============================================="
 
-              ssh -p $SERVER_PORT -o StrictHostKeyChecking=no $SERVER_USER@$SERVER_HOST << EOF
+              ssh -p $DEPLOY_PORT -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST << EOF
                   set -e
 
                   # -------------------------------
                   # Backup current project for rollback
                   # -------------------------------
-                  if [ -d "$SERVER_PATH" ]; then
+                  if [ -d "$DEPLOY_PATH" ]; then
                       TIMESTAMP=\$(date +%Y%m%d%H%M%S)
-                      BACKUP_PATH="\${SERVER_PATH}_backup_\$TIMESTAMP"
+                      BACKUP_PATH="\${DEPLOY_PATH}_backup_\$TIMESTAMP"
                       echo "Backing up current project to \$BACKUP_PATH..."
-                      cp -r "$SERVER_PATH" "\$BACKUP_PATH"
+                      cp -r "$DEPLOY_PATH" "\$BACKUP_PATH"
                   fi
 
                   # -------------------------------
                   # Navigate to project or clone repository
                   # -------------------------------
-                  if [ -d "$SERVER_PATH/.git" ]; then
+                  if [ -d "$DEPLOY_PATH/.git" ]; then
                       echo "Project exists. Fetching latest changes..."
-                      cd "$SERVER_PATH"
+                      cd "$DEPLOY_PATH"
                       git fetch --all
-                      git reset --hard origin/$BRANCH_NAME
+                      git reset --hard origin/$DEPLOY_BRANCH
                       git clean -fd
                   else
                       echo "Project does not exist. Cloning repository..."
-                      git clone -b $BRANCH_NAME https://github.com/${{ github.repository }} "$SERVER_PATH"
-                      cd "$SERVER_PATH"
+                      git clone -b $DEPLOY_BRANCH https://github.com/${{ github.repository }} "$DEPLOY_PATH"
+                      cd "$DEPLOY_PATH"
                   fi
 
                   # -------------------------------
@@ -143,16 +169,12 @@ jobs:
                   php artisan view:cache
                   php artisan storage:link
 
-                  echo "Deployment completed successfully for $BRANCH_NAME."
+                  echo "Deployment completed successfully for $DEPLOY_BRANCH."
           EOF
           }
 
           # -------------------------------
-          # Deploy based on environment
+          # Deploy to the determined environment
           # -------------------------------
-          if [ "$ENV" = "dev" ]; then
-              deploy "${DEV_BRANCH}" "${{ secrets.DEV_SERVER_USER }}" "${{ secrets.DEV_SERVER_HOST }}" "${{ secrets.DEV_SERVER_PORT }}" "${{ secrets.DEV_SERVER_PATH }}"
-          elif [ "$ENV" = "live" ]; then
-              deploy "${LIVE_BRANCH}" "${{ secrets.LIVE_SERVER_USER }}" "${{ secrets.LIVE_SERVER_HOST }}" "${{ secrets.LIVE_SERVER_PORT }}" "${{ secrets.LIVE_SERVER_PATH }}"
-          fi
+          deploy "$BRANCH_NAME" "$SERVER_USER" "$SERVER_HOST" "$SERVER_PORT" "$SERVER_PATH"
 
