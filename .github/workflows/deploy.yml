@@ -22,7 +22,7 @@ jobs:
           php-version: '8.2'
           extensions: mbstring, bcmath, intl, pdo_mysql
 
-      # Step 3: Install Composer dependencies in runner (optional)
+      # Step 3: Install Composer dependencies in runner
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader
 
@@ -50,32 +50,30 @@ jobs:
             BRANCH_NAME="${{ secrets.DEV_BRANCH || 'develop' }}"
           fi
 
-          # Pass GitHub repository to SSH session
+          # Set GitHub repository variable
           GITHUB_REPO="${{ github.repository }}"
 
-          # SSH into server and pass variables as environment variables
+          # SSH into server
           ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST \
             SERVER_PATH="$SERVER_PATH" \
             BRANCH_NAME="$BRANCH_NAME" \
             GITHUB_REPO="$GITHUB_REPO" \
             bash << 'EOF'
-            # Navigate to project folder or clone if it doesn't exist
-            if [ ! -d "$SERVER_PATH" ]; then
-              echo "Project not found. Cloning repository..."
+
+            # Check if project folder exists and contains Git repo and composer.lock
+            if [ ! -d "$SERVER_PATH" ] || [ ! -d "$SERVER_PATH/.git" ] || [ ! -f "$SERVER_PATH/composer.lock" ]; then
+              echo "Project folder invalid or missing. Cloning repository..."
+              rm -rf "$SERVER_PATH"
               git clone -b "$BRANCH_NAME" "https://github.com/$GITHUB_REPO.git" "$SERVER_PATH" || { echo "Failed to clone repository"; exit 1; }
             fi
 
+            # Navigate to project folder
             cd "$SERVER_PATH" || exit 1
 
-            # Ensure it's a git repository
-            if [ -d ".git" ]; then
-              echo "Updating existing project..."
-              git fetch --all
-              git reset --hard "origin/$BRANCH_NAME"
-            else
-              echo "⚠️ Not a git repository. Exiting."
-              exit 1
-            fi
+            # Update the project from Git
+            echo "Updating existing project..."
+            git fetch --all
+            git reset --hard "origin/$BRANCH_NAME"
 
             # Install Composer dependencies
             if command -v composer >/dev/null 2>&1; then
@@ -85,7 +83,7 @@ jobs:
               exit 1
             fi
 
-            # Laravel setup
+            # Laravel setup: generate key, migrate, cache config/routes/views, create storage link
             if [ -f "artisan" ]; then
               php artisan key:generate --force
               php artisan migrate --force
