@@ -11,38 +11,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      # -------------------------------
-      # Step 1: Checkout code
-      # -------------------------------
+      # Step 1: Checkout code in runner
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # -------------------------------
       # Step 2: Setup PHP with required extensions
-      # -------------------------------
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
           extensions: mbstring, bcmath, intl, pdo_mysql
 
-      # -------------------------------
-      # Step 3: Install Composer dependencies
-      # -------------------------------
+      # Step 3: Install Composer dependencies in runner (optional)
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader
 
-      # -------------------------------
       # Step 4: Setup SSH agent
-      # -------------------------------
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
-      # -------------------------------
       # Step 5: Deploy to server
-      # -------------------------------
       - name: Deploy to cPanel
         run: |
           # Determine environment based on branch
@@ -60,26 +50,47 @@ jobs:
             BRANCH_NAME="${{ secrets.DEV_BRANCH || 'develop' }}"
           fi
 
-          # SSH into server and deploy
-          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << 'EOF'
-            # Navigate to project or clone if not exists
-            cd $SERVER_PATH || git clone -b $BRANCH_NAME https://github.com/${GITHUB_REPOSITORY}.git $SERVER_PATH
+          # Pass GitHub repository to SSH session
+          GITHUB_REPO="${{ github.repository }}"
+
+          # SSH into server
+          ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -p $SERVER_PORT $SERVER_USER@$SERVER_HOST bash << EOF
+            # Navigate to project folder or clone if it doesn't exist
+            if [ ! -d "$SERVER_PATH" ]; then
+              echo "Project not found. Cloning repository..."
+              git clone -b $BRANCH_NAME https://github.com/$GITHUB_REPO.git $SERVER_PATH
+            fi
+
             cd $SERVER_PATH
 
-            # Fetch latest changes and reset branch
-            git fetch --all
-            git reset --hard origin/$BRANCH_NAME
+            # Ensure it's a git repository
+            if [ -d ".git" ]; then
+              echo "Updating existing project..."
+              git fetch --all
+              git reset --hard origin/$BRANCH_NAME
+            else
+              echo "⚠️ Not a git repository. Exiting."
+              exit 1
+            fi
 
             # Install Composer dependencies
-            composer install --no-dev --optimize-autoloader
+            if command -v composer >/dev/null 2>&1; then
+              composer install --no-dev --optimize-autoloader
+            else
+              echo "Composer not found!"
+            fi
 
             # Laravel setup
-            php artisan key:generate --force
-            php artisan migrate --force
-            php artisan config:cache
-            php artisan route:cache
-            php artisan view:cache
+            if [ -f "artisan" ]; then
+              php artisan key:generate --force
+              php artisan migrate --force
+              php artisan config:cache
+              php artisan route:cache
+              php artisan view:cache
+              php artisan storage:link || true
+            else
+              echo "artisan file not found!"
+            fi
 
-            # Create storage symlink if not exists
-            php artisan storage:link || true
-          EOF
+            echo "✅ Deployment completed successfully"
+EOF
