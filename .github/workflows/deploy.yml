@@ -119,6 +119,7 @@ jobs:
 
               ssh -p $DEPLOY_PORT -o StrictHostKeyChecking=no $DEPLOY_USER@$DEPLOY_HOST << EOF
                   set -e
+                  set -o pipefail
 
                   # -------------------------------
                   # Backup current project for rollback
@@ -141,8 +142,38 @@ jobs:
                       git clean -fd
                   else
                       echo "Project does not exist. Cloning repository..."
-                      git clone -b $DEPLOY_BRANCH https://github.com/${{ github.repository }} "$DEPLOY_PATH"
-                      cd "$DEPLOY_PATH"
+                      # Create parent directory if it doesn't exist
+                      PARENT_DIR="$(dirname "$DEPLOY_PATH")"
+                      if [ ! -d "$PARENT_DIR" ]; then
+                          echo "Creating parent directory: $PARENT_DIR"
+                          mkdir -p "$PARENT_DIR" || {
+                              echo "❌ Error: Failed to create parent directory: $PARENT_DIR"
+                              exit 1
+                          }
+                      fi
+                      
+                      # Try HTTPS first (more reliable for public repos)
+                      echo "Attempting to clone repository via HTTPS..."
+                      if git clone -b $DEPLOY_BRANCH https://github.com/${{ github.repository }}.git "$DEPLOY_PATH" 2>&1; then
+                          echo "✅ Repository cloned successfully via HTTPS"
+                      else
+                          echo "⚠️  HTTPS clone failed, trying SSH..."
+                          # Try SSH as fallback
+                          if git clone -b $DEPLOY_BRANCH git@github.com:${{ github.repository }}.git "$DEPLOY_PATH" 2>&1; then
+                              echo "✅ Repository cloned successfully via SSH"
+                          else
+                              echo "❌ Error: Failed to clone repository using both HTTPS and SSH"
+                              echo "Please check:"
+                              echo "  1. Repository URL is correct"
+                              echo "  2. Branch '$DEPLOY_BRANCH' exists"
+                              echo "  3. Repository is accessible"
+                              exit 1
+                          fi
+                      fi
+                      cd "$DEPLOY_PATH" || {
+                          echo "❌ Error: Failed to change directory to $DEPLOY_PATH"
+                          exit 1
+                      }
                   fi
 
                   # -------------------------------
