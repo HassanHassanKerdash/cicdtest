@@ -10,27 +10,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout the code from GitHub
       - name: Checkout code
         uses: actions/checkout@v3
 
+      # Step 2: Setup PHP environment
       - name: Setup PHP
         uses: shivammathur/setup-php@v2
         with:
           php-version: '8.2'
           extensions: mbstring, bcmath, intl, pdo_mysql
 
+      # Step 3: Install Composer dependencies locally
       - name: Install Composer dependencies
         run: composer install --no-dev --optimize-autoloader
 
+      # Step 4: Setup SSH agent with private key
       - name: Setup SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
+      # Step 5: Deploy to cPanel server
       - name: Deploy to cPanel server
         run: |
-          ssh -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
-          # تحقق إذا كان المجلد موجود
+          ssh -p ${{ secrets.SERVER_PORT }} -o StrictHostKeyChecking=no ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} << 'EOF'
+          
+          # Navigate to server path or clone repository if not exists
           if [ -d "${{ secrets.SERVER_PATH }}/.git" ]; then
               echo "Project exists, pulling latest changes..."
               cd ${{ secrets.SERVER_PATH }}
@@ -43,10 +49,14 @@ jobs:
               cd ${{ secrets.SERVER_PATH }}
           fi
 
-          # تثبيت التبعيات وتشغيل أوامر Laravel
+          # Install Composer dependencies on server
           composer install --no-dev --optimize-autoloader
+
+          # Run Laravel commands to prepare the application
           php artisan migrate --force
           php artisan config:cache
           php artisan route:cache
           php artisan view:cache
+
+          echo "Deployment completed successfully."
           EOF
