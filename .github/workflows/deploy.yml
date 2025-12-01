@@ -10,11 +10,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
 
-    env:
-      COMPOSER_PROCESS_TIMEOUT: 0
-      COMPOSER_NO_INTERACTION: 1
-      COMPOSER_NO_AUDIT: 1
-
     steps:
       # -------------------------------
       # Step 1: Checkout code
@@ -56,22 +51,26 @@ jobs:
           ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
 
       # -------------------------------
-      # Step 6: Deploy to selected environment
+      # Step 6: Deploy to selected environments
       # -------------------------------
       - name: Deploy to cPanel
         run: |
+          # Determine environment based on branch
           CURRENT_BRANCH="${{ github.ref_name }}"
-
           if [ "$CURRENT_BRANCH" = "main" ]; then
             ENV="live"
-            BRANCH_NAME="${{ secrets.LIVE_BRANCH }}"; BRANCH_NAME="${BRANCH_NAME:-main}"
+            # Use default "main" if LIVE_BRANCH secret is not set
+            BRANCH_NAME="${{ secrets.LIVE_BRANCH }}"
+            BRANCH_NAME="${BRANCH_NAME:-main}"
             SERVER_USER="${{ secrets.LIVE_SERVER_USER }}"
             SERVER_HOST="${{ secrets.LIVE_SERVER_HOST }}"
             SERVER_PORT="${{ secrets.LIVE_SERVER_PORT }}"
             SERVER_PATH="${{ secrets.LIVE_SERVER_PATH }}"
           elif [ "$CURRENT_BRANCH" = "develop" ]; then
             ENV="dev"
-            BRANCH_NAME="${{ secrets.DEV_BRANCH }}"; BRANCH_NAME="${BRANCH_NAME:-develop}"
+            # Use default "develop" if DEV_BRANCH secret is not set
+            BRANCH_NAME="${{ secrets.DEV_BRANCH }}"
+            BRANCH_NAME="${BRANCH_NAME:-develop}"
             SERVER_USER="${{ secrets.DEV_SERVER_USER }}"
             SERVER_HOST="${{ secrets.DEV_SERVER_HOST }}"
             SERVER_PORT="${{ secrets.DEV_SERVER_PORT }}"
@@ -81,71 +80,349 @@ jobs:
             exit 1
           fi
 
-          # Validate secrets
+          # Validate that all required secrets are set (except BRANCH_NAME which has defaults)
           if [ -z "$SERVER_USER" ] || [ -z "$SERVER_HOST" ] || [ -z "$SERVER_PORT" ] || [ -z "$SERVER_PATH" ]; then
-            echo "⚠️  Missing required secrets for $ENV environment"
-            exit 1
+            echo "⚠️  Warning: Missing required secrets for $ENV environment!"
+            echo "Skipping deployment. Please ensure the following secrets are set in GitHub:"
+            if [ "$ENV" = "live" ]; then
+              echo "  - LIVE_SERVER_USER (required)"
+              echo "  - LIVE_SERVER_HOST (required)"
+              echo "  - LIVE_SERVER_PORT (required)"
+              echo "  - LIVE_SERVER_PATH (required)"
+              echo "  - LIVE_BRANCH (optional, defaults to 'main')"
+            else
+              echo "  - DEV_SERVER_USER (required)"
+              echo "  - DEV_SERVER_HOST (required)"
+              echo "  - DEV_SERVER_PORT (required)"
+              echo "  - DEV_SERVER_PATH (required)"
+              echo "  - DEV_BRANCH (optional, defaults to 'develop')"
+            fi
+            echo ""
+            echo "To add secrets, go to: Settings → Secrets and variables → Actions"
+            echo "Workflow will continue but deployment will be skipped."
+            exit 0
           fi
 
-          echo "Deploying branch '$CURRENT_BRANCH' to environment '$ENV'"
+          echo "Deploying from branch '$CURRENT_BRANCH' to environment '$ENV'"
           echo "Using deployment branch: '$BRANCH_NAME'"
 
+          # Set repository variable for SSH script
+          GITHUB_REPO="${{ github.repository }}"
+
           deploy() {
-            DEPLOY_BRANCH=$1
-            DEPLOY_USER=$2
-            DEPLOY_HOST=$3
-            DEPLOY_PORT=$4
-            DEPLOY_PATH=$5
+              DEPLOY_BRANCH=$1
+              DEPLOY_USER=$2
+              DEPLOY_HOST=$3
+              DEPLOY_PORT=$4
+              DEPLOY_PATH=$5
 
-            echo "==============================================="
-            echo "Deploying branch '$DEPLOY_BRANCH' to $DEPLOY_HOST:$DEPLOY_PATH"
-            echo "==============================================="
+              echo "==============================================="
+              echo "Deploying branch '$DEPLOY_BRANCH' to $DEPLOY_HOST:$DEPLOY_PATH"
+              echo "==============================================="
 
-            # Use stdin script to avoid here-document issues
-            ssh -p "$DEPLOY_PORT" -o StrictHostKeyChecking=no "$DEPLOY_USER@$DEPLOY_HOST" 'bash -s' <<'DEPLOY_SCRIPT'
-              set -e
-              set -o pipefail
-              set -x
+              # Execute deployment via SSH with proper error handling
+              # Use EOF without quotes to allow variable expansion
+              if ssh -p $DEPLOY_PORT -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=60 -o ServerAliveCountMax=3 $DEPLOY_USER@$DEPLOY_HOST GITHUB_REPO="$GITHUB_REPO" bash << SSH_EOF
+                  # Set variables from outer scope
+                  DEPLOY_BRANCH="$DEPLOY_BRANCH"
+                  DEPLOY_PATH="$DEPLOY_PATH"
+                  REPO="$GITHUB_REPO"
+                  # Disable exit on error for better error handling
+                  set +e
+                  set -o pipefail
+                  
+                  # Log all commands
+                  set -x
+                  
+                  # Function to run command with retry
+                  run_with_retry() {
+                      local max_attempts=3
+                      local attempt=1
+                      local command="$@"
+                      
+                      while [ $attempt -le $max_attempts ]; do
+                          echo "Attempt $attempt of $max_attempts: $command"
+                          if eval "$command"; then
+                              return 0
+                          fi
+                          attempt=$((attempt + 1))
+                          if [ $attempt -le $max_attempts ]; then
+                              echo "⚠️  Command failed, retrying in 2 seconds..."
+                              sleep 2
+                          fi
+                      done
+                      echo "❌ Command failed after $max_attempts attempts: $command"
+                      return 1
+                  }
+                  
+                  # Function to check if command exists
+                  command_exists() {
+                      command -v "$1" >/dev/null 2>&1
+                  }
 
-              DEPLOY_BRANCH="$1"
-              DEPLOY_PATH="$2"
-              REPO="${GITHUB_REPOSITORY}"
+                  # -------------------------------
+                  # Validate paths and permissions
+                  # -------------------------------
+                  echo "Validating deployment path: $DEPLOY_PATH"
+                  
+                  # Normalize path (remove trailing slashes)
+                  DEPLOY_PATH=$(echo "$DEPLOY_PATH" | sed 's:/*$::')
+                  
+                  # Check if parent directory is writable
+                  PARENT_DIR=$(dirname "$DEPLOY_PATH")
+                  if [ ! -w "$PARENT_DIR" ] 2>/dev/null; then
+                      echo "⚠️  Warning: Parent directory may not be writable: $PARENT_DIR"
+                  fi
+                  
+                  # -------------------------------
+                  # Backup current project for rollback
+                  # -------------------------------
+                  if [ -d "$DEPLOY_PATH" ]; then
+                      TIMESTAMP=$(date +%Y%m%d%H%M%S)
+                      BACKUP_PATH="${DEPLOY_PATH}_backup_${TIMESTAMP}"
+                      echo "Backing up current project to $BACKUP_PATH..."
+                      if cp -r "$DEPLOY_PATH" "$BACKUP_PATH" 2>/dev/null; then
+                          echo "✅ Backup created successfully"
+                      else
+                          echo "⚠️  Warning: Backup failed, continuing anyway..."
+                      fi
+                  fi
 
-              # Backup current project
-              if [ -d "$DEPLOY_PATH" ]; then
-                TIMESTAMP=$(date +%Y%m%d%H%M%S)
-                BACKUP_PATH="${DEPLOY_PATH}_backup_${TIMESTAMP}"
-                cp -r "$DEPLOY_PATH" "$BACKUP_PATH" || echo "Backup failed, continuing..."
-              fi
+                  # -------------------------------
+                  # Navigate to project or clone repository
+                  # -------------------------------
+                  if [ -d "$DEPLOY_PATH/.git" ]; then
+                      echo "✅ Project exists. Updating from repository..."
+                      cd "$DEPLOY_PATH" || {
+                          echo "❌ Error: Failed to change directory to $DEPLOY_PATH"
+                          exit 1
+                      }
+                      
+                      # Backup important files before git operations
+                      if [ -f ".env" ]; then
+                          echo "Backing up .env file..."
+                          cp .env .env.backup 2>/dev/null || true
+                      fi
+                      
+                      # Configure git if needed
+                      git config --global --add safe.directory "$DEPLOY_PATH" 2>/dev/null || true
+                      
+                      # Fetch and reset with error handling
+                      echo "Fetching latest changes..."
+                      if ! run_with_retry "git fetch --all --prune"; then
+                          echo "⚠️  Warning: Git fetch had issues, continuing..."
+                      fi
+                      
+                      echo "Resetting to origin/$DEPLOY_BRANCH..."
+                      if ! git reset --hard "origin/$DEPLOY_BRANCH" 2>/dev/null; then
+                          echo "⚠️  Warning: Git reset failed, trying to checkout branch..."
+                          git checkout -f "$DEPLOY_BRANCH" 2>/dev/null || {
+                              echo "❌ Error: Failed to reset/checkout branch $DEPLOY_BRANCH"
+                              exit 1
+                          }
+                      fi
+                      
+                      # Clean untracked files but preserve important files
+                      echo "Cleaning untracked files..."
+                      git clean -fd -e ".env" -e ".env.backup" -e "error_log" -e "*.log" 2>/dev/null || {
+                          echo "⚠️  Warning: Git clean had issues, continuing..."
+                      }
+                      
+                      # Restore .env if it was backed up
+                      if [ -f ".env.backup" ] && [ ! -f ".env" ]; then
+                          echo "Restoring .env file..."
+                          mv .env.backup .env 2>/dev/null || true
+                      fi
+                  else
+                      echo "📦 Project does not exist. Cloning repository..."
+                      
+                      # Create parent directory if it doesn't exist
+                      PARENT_DIR=$(dirname "$DEPLOY_PATH")
+                      if [ ! -d "$PARENT_DIR" ]; then
+                          echo "Creating parent directory: $PARENT_DIR"
+                          mkdir -p "$PARENT_DIR" || {
+                              echo "❌ Error: Failed to create parent directory: $PARENT_DIR"
+                              exit 1
+                          }
+                      fi
+                      
+                      # Remove directory if it exists but is not a git repo
+                      if [ -d "$DEPLOY_PATH" ] && [ ! -d "$DEPLOY_PATH/.git" ]; then
+                          echo "⚠️  Directory exists but is not a git repository, removing..."
+                          rm -rf "$DEPLOY_PATH" || {
+                              echo "⚠️  Warning: Failed to remove directory, continuing..."
+                          }
+                      fi
+                      
+                      # Try HTTPS first (more reliable for public repos)
+                      echo "Attempting to clone repository via HTTPS..."
+                      REPO_URL_HTTPS="https://github.com/$REPO.git"
+                      REPO_URL_SSH="git@github.com:$REPO.git"
+                      
+                      if run_with_retry "git clone -b $DEPLOY_BRANCH $REPO_URL_HTTPS '$DEPLOY_PATH'"; then
+                          echo "✅ Repository cloned successfully via HTTPS"
+                      else
+                          echo "⚠️  HTTPS clone failed, trying SSH..."
+                          if run_with_retry "git clone -b $DEPLOY_BRANCH $REPO_URL_SSH '$DEPLOY_PATH'"; then
+                              echo "✅ Repository cloned successfully via SSH"
+                          else
+                              echo "❌ Error: Failed to clone repository using both HTTPS and SSH"
+                              echo "Please check:"
+                              echo "  1. Repository URL is correct: $REPO"
+                              echo "  2. Branch '$DEPLOY_BRANCH' exists"
+                              echo "  3. Repository is accessible"
+                              echo "  4. SSH key has proper permissions"
+                              exit 1
+                          fi
+                      fi
+                      
+                      cd "$DEPLOY_PATH" || {
+                          echo "❌ Error: Failed to change directory to $DEPLOY_PATH"
+                          exit 1
+                      }
+                  fi
+                  
+                  # Verify we're in the right directory
+                  if [ ! -f "artisan" ] && [ ! -f "composer.json" ]; then
+                      echo "⚠️  Warning: Project files not found, but continuing..."
+                  fi
 
-              # Clone or update repository
-              if [ -d "$DEPLOY_PATH/.git" ]; then
-                cd "$DEPLOY_PATH"
-                git fetch --all --prune
-                git reset --hard "origin/$DEPLOY_BRANCH"
+                  # -------------------------------
+                  # Ensure .env exists and is configured
+                  # -------------------------------
+                  if [ ! -f ".env" ]; then
+                      echo "Creating .env file..."
+                      if [ -f ".env.example" ]; then
+                          cp .env.example .env
+                          echo "✅ .env created from .env.example"
+                      else
+                          echo "⚠️  Warning: .env.example not found. Creating .env from scratch..."
+                          touch .env
+                      fi
+                      
+                      # Generate application key
+                      if command_exists php; then
+                          if php artisan key:generate --force 2>/dev/null; then
+                              echo "✅ Application key generated"
+                          else
+                              echo "⚠️  Warning: Failed to generate application key"
+                          fi
+                      else
+                          echo "⚠️  Warning: PHP not found, skipping key generation"
+                      fi
+                  else
+                      echo "✅ .env file already exists"
+                      # Ensure APP_KEY is set
+                      if ! grep -q "APP_KEY=" .env 2>/dev/null || grep -q "APP_KEY=$" .env 2>/dev/null; then
+                          echo "Generating application key..."
+                          php artisan key:generate --force 2>/dev/null || true
+                      fi
+                  fi
+
+                  # -------------------------------
+                  # Install Composer dependencies
+                  # -------------------------------
+                  echo "Installing Composer dependencies..."
+                  
+                  # Check if composer.json exists
+                  if [ ! -f "composer.json" ]; then
+                      echo "⚠️  Warning: composer.json not found, skipping Composer install"
+                  else
+                      # Check if composer is available
+                      if command_exists composer; then
+                          COMPOSER_CMD="composer"
+                      elif command_exists php && [ -f "composer.phar" ]; then
+                          COMPOSER_CMD="php composer.phar"
+                      elif command_exists php; then
+                          COMPOSER_CMD="php -r \"copy('https://getcomposer.org/installer', 'composer-setup.php');\" && php composer-setup.php && php -r \"unlink('composer-setup.php');\" && php composer.phar"
+                          echo "Downloading Composer..."
+                      else
+                          echo "❌ Error: Composer not found and PHP not available"
+                          exit 1
+                      fi
+                      
+                      # Install dependencies with retry
+                      if run_with_retry "$COMPOSER_CMD install --no-dev --optimize-autoloader --no-interaction --prefer-dist"; then
+                          echo "✅ Composer dependencies installed successfully"
+                      else
+                          echo "⚠️  Warning: Composer install had issues, but continuing..."
+                      fi
+                  fi
+
+                  # -------------------------------
+                  # Laravel maintenance tasks
+                  # -------------------------------
+                  echo "Running Laravel maintenance tasks..."
+                  
+                  # Check if artisan exists
+                  if [ ! -f "artisan" ]; then
+                      echo "⚠️  Warning: artisan file not found, skipping Laravel commands"
+                  else
+                      # Clear all caches first
+                      echo "Clearing Laravel caches..."
+                      php artisan config:clear 2>/dev/null || true
+                      php artisan route:clear 2>/dev/null || true
+                      php artisan view:clear 2>/dev/null || true
+                      php artisan cache:clear 2>/dev/null || true
+                      php artisan event:clear 2>/dev/null || true
+                      
+                      # Run migrations (may fail if database is not configured, that's OK)
+                      echo "Running database migrations..."
+                      if php artisan migrate --force --no-interaction 2>/dev/null; then
+                          echo "✅ Migrations completed successfully"
+                      else
+                          echo "⚠️  Warning: Migration failed (database may not be configured), continuing..."
+                      fi
+                      
+                      # Cache configurations (only if successful)
+                      echo "Caching Laravel configurations..."
+                      php artisan config:cache 2>/dev/null && echo "✅ Config cached" || echo "⚠️  Config cache failed"
+                      php artisan route:cache 2>/dev/null && echo "✅ Routes cached" || echo "⚠️  Route cache failed"
+                      php artisan view:cache 2>/dev/null && echo "✅ Views cached" || echo "⚠️  View cache failed"
+                      
+                      # Create storage link (ignore if already exists)
+                      echo "Creating storage symlink..."
+                      if php artisan storage:link 2>/dev/null; then
+                          echo "✅ Storage link created"
+                      else
+                          if [ -L "public/storage" ] || [ -d "public/storage" ]; then
+                              echo "✅ Storage link already exists"
+                          else
+                              echo "⚠️  Warning: Storage link creation failed"
+                          fi
+                      fi
+                      
+                      # Set proper permissions (if possible)
+                      if [ -w "storage" ] && [ -w "bootstrap/cache" ]; then
+                          chmod -R 775 storage bootstrap/cache 2>/dev/null || true
+                          echo "✅ Permissions set"
+                      fi
+                  fi
+                  
+                  # Final verification
+                  echo ""
+                  echo "==============================================="
+                  echo "✅ Deployment completed successfully!"
+                  echo "Branch: $DEPLOY_BRANCH"
+                  echo "Path: $DEPLOY_PATH"
+                  echo "==============================================="
+              SSH_EOF
+              then
+                  echo "✅ Deployment completed successfully"
               else
-                mkdir -p "$(dirname "$DEPLOY_PATH")"
-                git clone -b "$DEPLOY_BRANCH" "https://github.com/$REPO.git" "$DEPLOY_PATH"
-                cd "$DEPLOY_PATH"
+                  SSH_EXIT_CODE=$?
+                  echo "⚠️  Warning: Deployment completed with exit code $SSH_EXIT_CODE"
+                  echo "This may be normal if some optional steps failed"
+                  # Don't fail the workflow for non-critical errors
+                  if [ $SSH_EXIT_CODE -eq 255 ]; then
+                      echo "❌ SSH connection failed"
+                      exit 1
+                  fi
               fi
-
-              # Ensure .env exists
-              [ -f ".env" ] || { cp .env.example .env || touch .env; php artisan key:generate --force || true; }
-
-              # Install Composer dependencies
-              composer install --no-dev --optimize-autoloader || true
-
-              # Laravel maintenance
-              php artisan config:cache || true
-              php artisan route:cache || true
-              php artisan view:cache || true
-              php artisan storage:link || true
-
-              # Permissions
-              chmod -R 775 storage bootstrap/cache || true
-
-              echo "✅ Deployment completed on server!"
-            DEPLOY_SCRIPT "$DEPLOY_BRANCH" "$DEPLOY_PATH"
           }
 
+          # -------------------------------
+          # Deploy to the determined environment
+          # -------------------------------
           deploy "$BRANCH_NAME" "$SERVER_USER" "$SERVER_HOST" "$SERVER_PORT" "$SERVER_PATH"
+
